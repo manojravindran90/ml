@@ -55,7 +55,7 @@ g = torch.Generator().manual_seed(2147483647)
 class Linear:
     def __init__(self, n_in, n_out, bias=True):
         self.weights = torch.randn(n_in, n_out, generator=g) / (n_in ** 0.5)
-        self.bias = torch.randn(n_out) if bias else None
+        self.bias = torch.zeros(n_out) if bias else None
 
     def __call__(self, x):
         self.out = x @ self.weights
@@ -143,6 +143,7 @@ batch_size = 32
 lossi = []
 
 for i in range(max_steps):
+    
     #sampling the batch
     idx = torch.randint(0 ,X_train.shape[0], (batch_size,), generator=g) # (batch_size,)
     Xb, Yb = X_train[idx], Y_train[idx] # (batch_size, context_len), (batch_size,)
@@ -232,7 +233,34 @@ split_loss('dev')
 # # plt.hist(hpreact_act, bins=50);
 
 # %%
-# plt.plot(lossi)
+#visualizing forward pass activations of tanh layers
+plt.figure(figsize=(20,4))
+legends=[]
+for i, layer in enumerate(layers[:-1]):
+    if isinstance(layer, Tanh):
+        t = layer.out
+        print('layer %d (%10s): mean %+.2f, std %.2f, saturated: %.2f%%' % (i, layer.__class__.__name__, t.mean(), t.std(), (t.abs() > 0.97).float().mean()*100))
+        hy, hx = torch.histogram(t, density=True)
+        plt.plot(hx[:-1].detach(), hy.detach())
+        legends.append(f'layer {i} ({layer.__class__.__name__})')
+plt.legend(legends)
+plt.title('activation distribution')
+
+
+# %%
+#visualizing forward pass activations of tanh layers
+plt.figure(figsize=(20,4))
+legends=[]
+for i, layer in enumerate(layers[:-1]):
+    if isinstance(layer, Tanh):
+        t = layer.out
+        print('layer %d (%10s): mean %+.2f, std %.2f, saturated: %.2f%%' % (i, layer.__class__.__name__, t.mean(), t.std(), (t.abs() > 0.97).float().mean()*100))
+        hy, hx = torch.histogram(t, density=True)
+        plt.plot(hx[:-1].detach(), hy.detach())
+        legends.append(f'layer {i} ({layer.__class__.__name__})')
+plt.legend(legends)
+plt.title('activation distribution')
+
 
 # %%
 # sampling from the model
@@ -257,14 +285,5 @@ for _ in range(10):
         idx = idx[1:] + [new_idx]
     print(str)
     
-
-# %%
-
-
-# %%
-
-
-# %%
-
 
 
