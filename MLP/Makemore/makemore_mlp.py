@@ -14,7 +14,7 @@ vocab_size = len(stoi)
 
 # %%
 # creating the dataset
-context_len = 10
+context_len = 3
 
 def build_dataset(words):
     X, Y = [], []
@@ -98,23 +98,19 @@ class Tanh:
 
 # %%
 # network parameters
-n_embd = 30
+n_embd = 10
 n_hidden = 200
-batch_size = 64
+batch_size = 32
 
 C = torch.randn(vocab_size, n_embd) 
 layers = [
     Linear(n_embd * context_len, n_hidden, bias=False), BatchNorm1d(n_hidden), Tanh(),
-    Linear(n_hidden, n_hidden, bias=False), BatchNorm1d(n_hidden), Tanh(),
-    Linear(n_hidden, n_hidden, bias=False), BatchNorm1d(n_hidden), Tanh(),
-    Linear(n_hidden, n_hidden, bias=False), BatchNorm1d(n_hidden), Tanh(),
-    Linear(n_hidden, n_hidden, bias=False), BatchNorm1d(n_hidden), Tanh(),
-    Linear(n_hidden, vocab_size, bias=False), BatchNorm1d(vocab_size),
+    Linear(n_hidden, vocab_size)
 ]
 
 # make the softmax layer less confident in its initial predictions
 with torch.no_grad():
-    layers[-1].gamma *= 0.1
+    layers[-1].weights *= 0.1
 # boost the linear layers before the tanh by 5/3 in order to fight the squashing from tanh
 for layer in layers[:-1]:
     if isinstance(layer, Linear):
@@ -171,63 +167,8 @@ for layer in layers:
         layer.training = False
 
 # %%
-#visualizing forward pass activations of tanh layers
-plt.figure(figsize=(20,4))
-legends=[]
-for i, layer in enumerate(layers[:-1]):
-    if isinstance(layer, Tanh):
-        t = layer.out
-        print('layer %d (%10s): mean %+.2f, std %.2f, saturated: %.2f%%' % (i, layer.__class__.__name__, t.mean(), t.std(), (t.abs() > 0.97).float().mean()*100))
-        hy, hx = torch.histogram(t, density=True)
-        plt.plot(hx[:-1].detach(), hy.detach())
-        legends.append(f'layer {i} ({layer.__class__.__name__})')
-plt.legend(legends)
-plt.title('activation distribution')
+#Calculate loss
 
-
-# %%
-# #visualizing forward pass activations of tanh layers
-# # note: In order for this to work you need to enable retain_grad line in the training section
-# plt.figure(figsize=(20,4))
-# legends=[]
-# for i, layer in enumerate(layers[:-1]):
-#     if isinstance(layer, Tanh):
-#         t = layer.out.grad
-#         print('layer %d (%10s): mean %+f, std %e' % (i, layer.__class__.__name__, t.mean(), t.std()))
-#         hy, hx = torch.histogram(t, density=True)
-#         plt.plot(hx[:-1].detach(), hy.detach())
-#         legends.append(f'layer {i} ({layer.__class__.__name__})')
-# plt.legend(legends)
-# plt.title('activation distribution')
-
-
-# %%
-#visualizing forward pass activations of tanh layers
-plt.figure(figsize=(20,4))
-legends=[]
-for i, p in enumerate(parameters):
-    t = p.grad
-    if p.ndim == 2:
-        print('weight %10s | mean %+f | std %e | grad:data ratio %e' % (tuple(p.shape), t.mean(), t.std(), t.std()/p.std()))
-        hy, hx = torch.histogram(t, density=True)
-        plt.plot(hx[:-1].detach(), hy.detach())
-        legends.append(f'{i} {tuple(p.shape)}')
-plt.legend(legends)
-plt.title('activation distribution')
-
-
-# %%
-#visualizing forward pass activations of tanh layers
-plt.figure(figsize=(20,4))
-legends=[]
-for i, p in enumerate(parameters):
-    if p.ndim == 2:
-        plt.plot([ud[j][i] for j in range(len(ud))])
-        legends.append('param %d' % i)
-plt.plot([0, len(ud)], [-3,-3], 'k')
-plt.legend(legends)
-
-# %%
 @torch.no_grad()
 def split_loss(split):
     x, y = {
@@ -246,37 +187,6 @@ def split_loss(split):
 split_loss('train')
 split_loss('test')
 split_loss('dev')
-
-# %%
-# before any optimizations
-    # train loss: 2.1190
-    # test loss: 2.1607
-    # dev loss: 2.1675
-
-# Fixing the initialization of the w2 and setting b2 to zero 
-    # train loss: 2.0693
-    # test loss: 2.1332
-    # dev loss: 2.1368
-
-# Fixing the oversaturation of the tanh layer by scaling down the w1 and b1
-    # train loss: 2.0343
-    # test loss: 2.1023
-    # dev loss: 2.1058
-
-# Loss after adding batch normalization
-    # train loss: 2.0668
-    # test loss: 2.1048
-    # dev loss: 2.1065
-
-# Adding batchnorm layer
-    # train loss: 2.0123
-    # test loss: 2.0841
-    # dev loss: 2.0846
-
-# Fiddled with hyper parameters -> n_embd = 30, n_hidden = 200, batch_size = 64, max_steps = 200000, batch_size = 32
-    # train loss: 1.6545
-    # test loss: 2.0120
-    # dev loss: 2.0134
 
 # %%
 # sampling from the model
