@@ -14,12 +14,12 @@ vocab_size = len(stoi)
 
 # %%
 # creating the dataset
-context_len = 3
+block_size = 8
 
 def build_dataset(words):
     X, Y = [], []
     for w in words:
-        context = [0] * context_len
+        context = [0] * block_size
         for ch in w+'.':
             X.append(context)
             Y.append(stoi[ch])
@@ -44,6 +44,9 @@ print('X_dev.shape -->', X_dev.shape, 'Y_dev.shape -->', Y_dev.shape)
 
 # %%
 # Class Definition for Linear, BatchNorm and Tanh layers, made to look like pytorch's
+from typing import Any
+
+
 class Linear:
     def __init__(self, n_in, n_out, bias=True):
         self.weights = torch.randn(n_in, n_out) / (n_in ** 0.5)
@@ -60,6 +63,51 @@ class Linear:
             return [self.weights, self.bias]
         else:
             return [self.weights]
+    
+class Embedding:
+    def __init__(self, vocab_size, n_embd):
+        self.embedding = torch.randn(vocab_size, n_embd)
+    
+    def __call__(self, x):
+        self.out = self.embedding[x]
+        return self.out
+
+    def parameters(self):
+        return [self.embedding]
+
+class Flatten:
+    def __call__(self, x):
+        batch_dim = x.shape[0]
+        self.out = x.view(batch_dim, -1)
+        return self.out
+
+    def parameters(self):
+        return []
+
+class FlattenConsecutive:
+    def __init__(self, n):
+        self.n = n
+
+    def __call__(self, x):
+        B,T,C = x.shape
+        self.out = x.view(B, T//self.n, C*self.n)
+        self.out = torch.squeeze(self.out, dim=1)
+        return self.out
+
+    def parameters(self):
+        return []
+    
+class Sequential:
+    def __init__(self, layers):
+        self.layers = layers
+
+    def __call__(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
+    def parameters(self):
+        return [p for layer in self.layers for p in layer.parameters()]
 
 class BatchNorm1d:
     def __init__(self, dim, eps=1e-5, moementum=0.1):
@@ -73,8 +121,12 @@ class BatchNorm1d:
     
     def __call__(self, x):
         if self.training:
-            xmean = x.mean(dim=0, keepdim=True)
-            xvar = x.var(dim=0, keepdim=True)
+            if x.ndim == 2:
+                dim = 0
+            elif x.ndim == 3:
+                dim = (0,1)
+            xmean = x.mean(dim, keepdim=True)
+            xvar = x.var(dim, keepdim=True)
             with torch.no_grad():
                 self.running_var = (1-self.moementum) * self.running_var + self.moementum * xvar
                 self.running_mean = (1-self.moementum) * self.running_mean + self.moementum * xmean
@@ -98,25 +150,27 @@ class Tanh:
 
 # %%
 # network parameters
-n_embd = 10
-n_hidden = 200
+n_embd = 24
+n_hidden = 128
 batch_size = 32
 
-C = torch.randn(vocab_size, n_embd) 
-layers = [
-    Linear(n_embd * context_len, n_hidden, bias=False), BatchNorm1d(n_hidden), Tanh(),
+model = Sequential([
+    Embedding(vocab_size, n_embd), 
+    FlattenConsecutive(2), Linear(n_embd * 2, n_hidden, bias=False), BatchNorm1d(n_hidden), Tanh(),
+    FlattenConsecutive(2), Linear(n_hidden * 2, n_hidden, bias=False), BatchNorm1d(n_hidden), Tanh(),
+    FlattenConsecutive(2), Linear(n_hidden * 2, n_hidden, bias=False), BatchNorm1d(n_hidden), Tanh(),
     Linear(n_hidden, vocab_size)
-]
+])
 
 # make the softmax layer less confident in its initial predictions
 with torch.no_grad():
-    layers[-1].weights *= 0.1
+    model.layers[-1].weights *= 0.1
 # boost the linear layers before the tanh by 5/3 in order to fight the squashing from tanh
-for layer in layers[:-1]:
+for layer in model.layers[:-1]:
     if isinstance(layer, Linear):
         layer.weights *= 5/3
 
-parameters = [C] + [p for layer in layers for p in layer.parameters()]
+parameters = [p for layer in model.layers for p in layer.parameters()]
 print(sum(p.nelement() for p in parameters))
 for p in parameters:
     p.requires_grad = True
@@ -131,14 +185,10 @@ ud = [] # update to data ratio
 for i in range(max_steps):
     #sampling the batch
     idx = torch.randint(0 ,X_train.shape[0], (batch_size,)) # (batch_size,)
-    Xb, Yb = X_train[idx], Y_train[idx] # (batch_size, context_len), (batch_size,)
+    Xb, Yb = X_train[idx], Y_train[idx] # (batch_size, block_size), (batch_size,)
 
     #forward pass
-    emb = C[Xb]  # (batch_size, context_len, n_embd)
-    embcat = emb.view(emb.shape[0], -1) # (batch_size, n_embd * context_len)
-    logits = embcat
-    for layer in layers:
-        logits = layer(logits)
+    logits = model(Xb)
     loss = F.cross_entropy(logits, Yb)
 
     #backward pass
@@ -161,8 +211,14 @@ for i in range(max_steps):
  
 
 # %%
+model.layers[3].running_mean.shape
+
+# %%
+plt.plot(10**(torch.tensor(lossi)).view(-1, 1000).mean(1))
+
+# %%
 # Setting non-training mode in the BatchNorm1d layer to use the calculated mean and var 
-for layer in layers:
+for layer in model.layers:
     if isinstance(layer, BatchNorm1d):
         layer.training = False
 
@@ -176,11 +232,7 @@ def split_loss(split):
         'train' : (X_train, Y_train),
         'dev' : (X_dev, Y_dev)
     }[split]
-    emb = C[x]  # (batch_size, context_len, n_embd)
-    embcat = emb.view(emb.shape[0], -1) # (batch_size, n_embd * context_len)
-    logits = embcat
-    for layer in layers:
-        logits = layer(logits)
+    logits = model(x)
     loss = F.cross_entropy(logits, y)
     print(f'{split} loss: {loss:.4f}')
 
@@ -192,13 +244,9 @@ split_loss('dev')
 # sampling from the model
 for _ in range(10):
     str = ''
-    idx = [0] * context_len
+    idx = [0] * block_size
     while True:
-        emb = C[torch.tensor([idx])]
-        embcat = emb.view(emb.shape[0], -1) # (batch_size, n_embd * context_len)
-        logits = embcat
-        for layer in layers:
-            logits = layer(logits)
+        logits = model(torch.tensor([idx]))
         probs = F.softmax(logits, dim=1)
         new_idx = torch.multinomial(probs, num_samples=1).item()
         if new_idx == 0:
@@ -207,5 +255,11 @@ for _ in range(10):
         idx = idx[1:] + [new_idx]
     print(str)
     
+
+# %%
+
+
+# %%
+ 
 
 
